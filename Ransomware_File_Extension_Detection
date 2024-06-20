@@ -1,0 +1,34 @@
+//Detección de Fichero con Doble Extensión cuya segunda extensión esta vinculada con artefactos ransomware
+let OriginalExtension = dynamic(['.pdf', '.docx', '.jpg', '.xlsx', '.pptx', '.txt']);
+let RansomwareExtensionsInput  = externaldata(Extension: string)[@"https://raw.githubusercontent.com/eshlomo1/Ransomware-NOTE/main/ransomware-extension-list.txt"] with (format="txt", ignoreFirstRecord=True);
+let RansomwareExtensionAddition = dynamic(['.AÑADIR AQUÍ EXTENSIONES ADICIONALES QUE NO SE ENCUENTRAN EN EL LISTADO']); // Listado de extensiones adicionales.
+let RansomwareExtensions = materialize (
+     RansomwareExtensionsInput
+     | distinct Extension
+     | extend RawExtention = substring(Extension, 1, 
+string_size(Extension))
+     );
+DeviceFileEvents
+| where ActionType == "FileRenamed"
+// Extraer extensión de archivo
+| extend PreviousFileExtension = extract("\\.([a-z])*", 0, PreviousFileName)
+| extend NewFileExtension = extract(@'\.(.*)', 0, FileName)
+// Extensión de archivo cambiada
+| where PreviousFileExtension != NewFileExtension
+| where PreviousFileExtension has_any (OriginalExtension)
+| extend RansomwareCheck = strcat(PreviousFileExtension, ".")
+// Comprobar si la extensión del nuevo archivo contiene una posible extensión de ransomware (por ejemplo, .docx.encrypted o .pdf.ezz
+| where NewFileExtension contains RansomwareCheck
+// Descartar las extensiones de archivo duplicadas para limitar los falsos positivos (por ejemplo, .pdf.pdf o .docx.docx).
+| extend DuplicateExtensionCheck = split(NewFileExtension, ".")
+| where tolower(tostring(DuplicateExtensionCheck[1])) != tolower(tostring(DuplicateExtensionCheck[2]))
+| where tostring(DuplicateExtensionCheck[2]) has_any (RansomwareExtensions) or FileName has_any (RansomwareExtensionAddition)
+// Presentar resultados
+| project-reorder
+     Timestamp,
+     PreviousFileExtension,
+     PreviousFileName,
+     NewFileExtension,
+     FileName,
+     DeviceName,
+     InitiatingProcessAccountName
